@@ -1,0 +1,76 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Deploys ONLY the foundational infrastructure for the Vaxelrod AI System (ECR, S3, SQS, IAM Roles).'
+
+Parameters:
+  RecipientEmailAddress:
+    Type: String
+    Description: 'The email address where quotes will be sent. You must verify this address in SES.'
+
+Resources:
+  # === ECR Repositories for Docker Images ===
+  QuoterECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: vaxelrod-quoter
+      ImageScanningConfiguration:
+        ScanOnPush: true
+
+  ScraperECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: vaxelrod-scraper
+      ImageScanningConfiguration:
+        ScanOnPush: true
+
+  # === S3 Bucket for Product Data ===
+  ProductDataBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'vaxelrod-product-data-${AWS::AccountId}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # === SQS Queue for Opportunities ===
+  MicropurchaseQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: micropurchase-opportunities-queue
+      VisibilityTimeout: 90
+
+  # === IAM Role for Lambda Functions ===
+  VaxelrodLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: Vaxelrod-Lambda-Execution-Role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: Vaxelrod-Core-Permissions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: "secretsmanager:GetSecretValue"
+                Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:Vaxelrod-Gemini-API-Key-*'
+              - Effect: Allow
+                Action: "s3:ListBucket"
+                Resource: !GetAtt ProductDataBucket.Arn
+              - Effect: Allow
+                Action: "s3:GetObject"
+                Resource: !Sub '${ProductDataBucket.Arn}/*'
+              - Effect: Allow
+                Action: "ses:SendEmail"
+                Resource: "*"
+              - Effect: Allow
+                Action: ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes", "sqs:SendMessage"]
+                Resource: !GetAtt MicropurchaseQueue.Arn
+

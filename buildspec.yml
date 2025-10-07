@@ -1,0 +1,27 @@
+version: 0.2
+
+env:
+  shell: bash
+
+phases:
+  pre_build:
+    commands:
+      - echo "Logging in to Amazon ECR..."
+      - ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin ${ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com
+      - CACHE_BUST=$(date +%s)
+  build:
+    commands:
+      - echo "Build started on $(date)"
+      - echo "Building the Quoter Docker image..."
+      - docker build --build-arg CACHE_BUST="${CACHE_BUST}" -t vaxelrod-quoter -f Dockerfile .
+      - docker tag vaxelrod-quoter:latest ${ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/vaxelrod-quoter:latest
+      - echo "Building the Scraper Docker image..."
+      - docker build --build-arg CACHE_BUST="${CACHE_BUST}" -t vaxelrod-scraper -f scraper.dockerfile .
+      - docker tag vaxelrod-scraper:latest ${ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/vaxelrod-scraper:latest
+  post_build:
+    commands:
+      - echo "Build completed on $(date)"
+      - echo "Pushing Docker images to ECR..."
+      - docker push ${ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/vaxelrod-quoter:latest
+      - docker push ${ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/vaxelrod-scraper:latest
