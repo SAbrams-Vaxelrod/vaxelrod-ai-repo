@@ -32,8 +32,6 @@ def get_gemini_api_key():
         if not secret_string:
             raise ValueError("SecretString from Secrets Manager is empty.")
         
-        # **EXPERT FIX**: Attempt to parse as JSON first, but fall back to raw string
-        # This handles secrets stored as {"api_key": "..."} or just the key itself.
         try:
             secret_data = json.loads(secret_string)
             key = secret_data.get('GEMINI_API_KEY') or secret_data.get('api_key') or secret_string
@@ -52,15 +50,14 @@ def configure_gemini():
         raise RuntimeError("Failed to get a valid Gemini API key from Secrets Manager.")
     
     genai.configure(api_key=api_key)
-    # **EXPERT FIX**: Log the SDK version to confirm the correct one is installed.
     log.info({"message": "Gemini configured successfully", "gemini_sdk_version": getattr(genai, '__version__', 'unknown')})
 
 def load_product_catalog():
     """Downloads and loads the product catalog from S3 into a pandas DataFrame."""
     log.info(f"Loading catalog '{PRODUCT_CATALOG_KEY}' from bucket '{S3_BUCKET_NAME}'")
     obj = s3.get_object(Bucket=S3_BUCKET_NAME, Key=PRODUCT_CATALOG_KEY)
-    # Use 'utf-8-sig' to handle potential Byte Order Mark (BOM) in CSV files
-    return pd.read_csv(BytesIO(obj['Body'].read().decode('utf-8-sig')))
+    # EXPERT FIX: Use BytesIO to handle CSV files safely, regardless of encoding.
+    return pd.read_csv(BytesIO(obj['Body'].read()))
 
 def call_gemini_with_retry(model_name, prompt, max_retries=3, backoff_factor=1.5):
     """Calls the Gemini API with exponential backoff and robust error handling."""
@@ -71,7 +68,6 @@ def call_gemini_with_retry(model_name, prompt, max_retries=3, backoff_factor=1.5
         try:
             response = model.generate_content(prompt)
             text_response = getattr(response, 'text', '').strip()
-            # **EXPERT FIX**: Ensure the response from Gemini is not empty.
             if not text_response:
                 raise RuntimeError("Received an empty 'text' response from Gemini.")
             return text_response
@@ -100,7 +96,6 @@ def lambda_handler(event, context):
                 if not product_name or quantity <= 0:
                     continue
                 
-                # Use str.contains for flexible matching of product names
                 row = df_catalog[df_catalog['Product_Name'].str.contains(product_name, case=False, na=False)]
                 
                 if not row.empty:
@@ -141,3 +136,4 @@ def lambda_handler(event, context):
     except Exception:
         log.exception("A critical error occurred in the Lambda handler.")
         raise
+

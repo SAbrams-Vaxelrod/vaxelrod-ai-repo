@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Deploys ONLY the foundational infrastructure for the Vaxelrod AI System (ECR, S3, SQS, IAM Roles).'
+Description: 'Deploys the complete Vaxelrod AI System including ECR, S3, SQS, IAM Roles, and Lambda Functions.'
 
 Parameters:
   RecipientEmailAddress:
@@ -60,10 +60,8 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: "secretsmanager:GetSecretValue"
-                Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:Vaxelrod-Gemini-API-Key-*'
-              - Effect: Allow
-                Action: "s3:ListBucket"
-                Resource: !GetAtt ProductDataBucket.Arn
+                # EXPERT FIX: Use a wildcard to match the secret's random suffix.
+                Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:Vaxelrod-Gemini-API-Key-prod-*'
               - Effect: Allow
                 Action: "s3:GetObject"
                 Resource: !Sub '${ProductDataBucket.Arn}/*'
@@ -73,4 +71,66 @@ Resources:
               - Effect: Allow
                 Action: ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes", "sqs:SendMessage"]
                 Resource: !GetAtt MicropurchaseQueue.Arn
+
+  # === Lambda Function: Scraper ===
+  ScraperFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: vaxelrod-scraper
+      PackageType: Image
+      Role: !GetAtt VaxelrodLambdaRole.Arn
+      Timeout: 60
+      MemorySize: 512
+      Environment:
+        Variables:
+          SQS_QUEUE_URL: !Ref MicropurchaseQueue
+      Code:
+        ImageUri: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/vaxelrod-scraper:latest'
+
+  # === Lambda Function: Quoter ===
+  QuoterFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: vaxelrod-quoter
+      PackageType: Image
+      Role: !GetAtt VaxelrodLambdaRole.Arn
+      Timeout: 90
+      MemorySize: 512
+      Environment:
+        Variables:
+          GEMINI_API_KEY_SECRET_NAME: 'Vaxelrod-Gemini-API-Key-prod'
+          S3_BUCKET_NAME: !Ref ProductDataBucket
+          PRODUCT_CATALOG_KEY: 'products.csv'
+          SENDER_EMAIL: !Ref RecipientEmailAddress
+          RECIPIENT_EMAIL: !Ref RecipientEmailAddress
+      Code:
+        ImageUri: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/vaxelrod-quoter:latest'
+
+  # === SQS to Quoter Event Source Mapping ===
+  QuoterEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !GetAtt MicropurchaseQueue.Arn
+      FunctionName: !GetAtt QuoterFunction.Arn
+      Enabled: true
+      BatchSize: 1
+
+  # === EventBridge Schedule for Scraper ===
+  ScraperScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: "Run scraper every 10 minutes"
+      ScheduleExpression: "rate(10 minutes)"
+      State: "ENABLED"
+      Targets:
+        - Arn: !GetAtt ScraperFunction.Arn
+          Id: "VaxelrodScraperTarget"
+
+  ScraperInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt ScraperFunction.Arn
+      Action: "lambda:InvokeFunction"
+      Principal: "events.amazonaws.com"
+      SourceArn: !GetAtt ScraperScheduleRule.Arn
 
