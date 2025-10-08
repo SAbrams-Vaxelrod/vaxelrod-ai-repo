@@ -56,7 +56,7 @@ def load_product_catalog():
     """Downloads and loads the product catalog from S3 into a pandas DataFrame."""
     log.info(f"Loading catalog '{PRODUCT_CATALOG_KEY}' from bucket '{S3_BUCKET_NAME}'")
     obj = s3.get_object(Bucket=S3_BUCKET_NAME, Key=PRODUCT_CATALOG_KEY)
-    # EXPERT FIX: Use BytesIO to handle CSV files safely, regardless of encoding.
+    # EXPERT FIX: Use BytesIO directly on the raw bytes from the S3 object body to avoid TypeErrors.
     return pd.read_csv(BytesIO(obj['Body'].read()))
 
 def call_gemini_with_retry(model_name, prompt, max_retries=3, backoff_factor=1.5):
