@@ -2,6 +2,10 @@ version: 0.2
 
 env:
   shell: bash
+  variables:
+    # These should be set in the CodeBuild project environment
+    # SES_SENDER: "your-sender@example.com"
+    # SES_RECIPIENT: "your-recipient@example.com"
 
 phases:
   pre_build:
@@ -9,19 +13,33 @@ phases:
       - echo "Logging in to Amazon ECR..."
       - ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
       - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin ${ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com
-      - CACHE_BUST=$(date +%s)
+
   build:
     commands:
       - echo "Build started on $(date)"
+      - CACHE_BUST=$(date +%s)
+      
       - echo "Building the Quoter Docker image..."
       - docker build --build-arg CACHE_BUST="${CACHE_BUST}" -t vaxelrod-quoter -f Dockerfile .
       - docker tag vaxelrod-quoter:latest ${ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/vaxelrod-quoter:latest
+      
       - echo "Building the Scraper Docker image..."
       - docker build --build-arg CACHE_BUST="${CACHE_BUST}" -t vaxelrod-scraper -f scraper.dockerfile .
       - docker tag vaxelrod-scraper:latest ${ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/vaxelrod-scraper:latest
+
   post_build:
     commands:
       - echo "Build completed on $(date)"
       - echo "Pushing Docker images to ECR..."
       - docker push ${ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/vaxelrod-quoter:latest
       - docker push ${ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/vaxelrod-scraper:latest
+
+      - echo "Refreshing Lambda image code to latest digest..."
+      - aws lambda update-function-code --function-name vaxelrod-quoter --image-uri ${ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/vaxelrod-quoter:latest
+      - aws lambda update-function-code --function-name vaxelrod-scraper --image-uri ${ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/vaxelrod-scraper:latest
+
+      - echo "Updating Quoter env (GEMINI_MODEL default)"
+      - |
+        aws lambda update-function-configuration --function-name vaxelrod-quoter --environment "Variables={GEMINI_API_KEY_SECRET_NAME=Vaxelrod-Gemini-API-Key-prod,GEMINI_MODEL=gemini-2.5-flash,S3_BUCKET_NAME=vaxelrod-product-data-${ACCOUNT_ID},PRODUCT_CATALOG_KEY=products.csv,SENDER_EMAIL=${SES_SENDER},RECIPIENT_EMAIL=${SES_RECIPIENT}}" || true
+
+

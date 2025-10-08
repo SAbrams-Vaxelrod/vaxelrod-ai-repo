@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Deploys the complete Vaxelrod AI System including ECR, S3, SQS, IAM Roles, and Lambda Functions.'
+Description: 'Deploys the complete, hardened Vaxelrod AI System including ECR, S3 (with SSE), SQS (with DLQ), IAM Roles, and Lambda Functions.'
 
 Parameters:
   RecipientEmailAddress:
@@ -22,7 +22,7 @@ Resources:
       ImageScanningConfiguration:
         ScanOnPush: true
 
-  # === S3 Bucket for Product Data ===
+  # === S3 Bucket for Product Data (with Server-Side Encryption) ===
   ProductDataBucket:
     Type: AWS::S3::Bucket
     Properties:
@@ -32,13 +32,27 @@ Resources:
         BlockPublicPolicy: true
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
 
-  # === SQS Queue for Opportunities ===
+  # === SQS Dead Letter Queue (DLQ) ===
+  MicropurchaseDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: micropurchase-opportunities-dlq
+      MessageRetentionPeriod: 1209600 # 14 days
+
+  # === SQS Main Queue (with Redrive Policy to DLQ) ===
   MicropurchaseQueue:
     Type: AWS::SQS::Queue
     Properties:
       QueueName: micropurchase-opportunities-queue
       VisibilityTimeout: 90
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt MicropurchaseDLQ.Arn
+        maxReceiveCount: 5
 
   # === IAM Role for Lambda Functions ===
   VaxelrodLambdaRole:
@@ -60,8 +74,7 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: "secretsmanager:GetSecretValue"
-                # EXPERT FIX: Use a wildcard to match the secret's random suffix.
-                Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:Vaxelrod-Gemini-API-Key-prod-*'
+                Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:Vaxelrod-Gemini-API-Key-prod-*' # Wildcard for suffix
               - Effect: Allow
                 Action: "s3:GetObject"
                 Resource: !Sub '${ProductDataBucket.Arn}/*'
@@ -79,7 +92,7 @@ Resources:
       FunctionName: vaxelrod-scraper
       PackageType: Image
       Role: !GetAtt VaxelrodLambdaRole.Arn
-      Timeout: 60
+      Timeout: 30
       MemorySize: 512
       Environment:
         Variables:
@@ -87,18 +100,19 @@ Resources:
       Code:
         ImageUri: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/vaxelrod-scraper:latest'
 
-  # === Lambda Function: Quoter ===
+  # === Lambda Function: Quoter (Hardened) ===
   QuoterFunction:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: vaxelrod-quoter
       PackageType: Image
       Role: !GetAtt VaxelrodLambdaRole.Arn
-      Timeout: 90
-      MemorySize: 512
+      Timeout: 60 # Increased timeout
+      MemorySize: 1024 # Increased memory
       Environment:
         Variables:
           GEMINI_API_KEY_SECRET_NAME: 'Vaxelrod-Gemini-API-Key-prod'
+          GEMINI_MODEL: 'gemini-2.5-flash' # Explicitly set model
           S3_BUCKET_NAME: !Ref ProductDataBucket
           PRODUCT_CATALOG_KEY: 'products.csv'
           SENDER_EMAIL: !Ref RecipientEmailAddress
@@ -106,14 +120,17 @@ Resources:
       Code:
         ImageUri: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/vaxelrod-quoter:latest'
 
-  # === SQS to Quoter Event Source Mapping ===
+  # === SQS to Quoter Event Source Mapping (with Partial Batch Failure support) ===
   QuoterEventSourceMapping:
     Type: AWS::Lambda::EventSourceMapping
     Properties:
       EventSourceArn: !GetAtt MicropurchaseQueue.Arn
       FunctionName: !GetAtt QuoterFunction.Arn
       Enabled: true
-      BatchSize: 1
+      BatchSize: 5
+      MaximumBatchingWindowInSeconds: 2
+      FunctionResponseTypes:
+        - ReportBatchItemFailures
 
   # === EventBridge Schedule for Scraper ===
   ScraperScheduleRule:
@@ -133,3 +150,4 @@ Resources:
       Action: "lambda:InvokeFunction"
       Principal: "events.amazonaws.com"
       SourceArn: !GetAtt ScraperScheduleRule.Arn
+
