@@ -14,7 +14,7 @@ from botocore.exceptions import ClientError
 log = logging.getLogger()
 log.setLevel(logging.INFO)
 
-# Environment Variables
+# Environment Variables from Lambda Configuration
 S3_BUCKET_NAME = os.environ.get("S3_BUCKET_NAME")
 PRODUCT_CATALOG_KEY = os.environ.get("PRODUCT_CATALOG_KEY", "products.csv")
 GEMINI_SECRET_NAME = os.environ.get("GEMINI_API_KEY_SECRET_NAME", "Vaxelrod-Gemini-API-Key-prod")
@@ -36,14 +36,10 @@ def _get_gemini_api_key(secret_name: str) -> str:
     return resp["SecretBinary"].decode("utf-8")
 
 def load_product_catalog() -> pd.DataFrame:
-    """
-    Loads the product catalog from S3 into a pandas DataFrame with robust fallbacks.
-    """
+    """Loads the product catalog from S3 with robust encoding fallbacks."""
     log.info("Loading catalog %r from bucket %r.", PRODUCT_CATALOG_KEY, S3_BUCKET_NAME)
     obj = s3.get_object(Bucket=S3_BUCKET_NAME, Key=PRODUCT_CATALOG_KEY)
     body_bytes = obj["Body"].read()
-
-    # Attempt to read with different encodings
     try:
         return pd.read_csv(BytesIO(body_bytes))
     except Exception as e1:
@@ -60,7 +56,6 @@ def summarize_products(df: pd.DataFrame, max_rows: int = 8) -> str:
     if not cols:
         cols = list(df.columns)[:5]
     sample = df[cols].head(max_rows).copy()
-    
     lines = ["\t".join([str(c) for c in sample.columns])]
     for _, row in sample.iterrows():
         lines.append("\t".join([str(row.get(c, "")) for c in sample.columns]))
@@ -95,6 +90,7 @@ def pick_supported_model(preferred: str) -> str:
         names = {m.name.split("/")[-1] for m in models}
         for candidate in [preferred, "gemini-2.5-pro", "gemini-2.5-flash"]:
             if candidate in names:
+                log.info("Selected supported model: %s", candidate)
                 return candidate
     except Exception as e:
         log.warning("Could not list models, using preferred: %s", e)

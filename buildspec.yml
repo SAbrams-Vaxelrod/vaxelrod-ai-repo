@@ -2,10 +2,7 @@ version: 0.2
 
 env:
   shell: bash
-  variables:
-    # These should be set in the CodeBuild project environment
-    # SES_SENDER: "your-sender@example.com"
-    # SES_RECIPIENT: "your-recipient@example.com"
+  # Variables are now defined only in the CodeBuild project environment settings.
 
 phases:
   pre_build:
@@ -41,5 +38,4 @@ phases:
       - echo "Updating Quoter env (GEMINI_MODEL default)"
       - |
         aws lambda update-function-configuration --function-name vaxelrod-quoter --environment "Variables={GEMINI_API_KEY_SECRET_NAME=Vaxelrod-Gemini-API-Key-prod,GEMINI_MODEL=gemini-2.5-flash,S3_BUCKET_NAME=vaxelrod-product-data-${ACCOUNT_ID},PRODUCT_CATALOG_KEY=products.csv,SENDER_EMAIL=${SES_SENDER},RECIPIENT_EMAIL=${SES_RECIPIENT}}" || true
-
 
